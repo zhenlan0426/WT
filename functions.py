@@ -1,84 +1,66 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Sun Jan  6 13:41:55 2019
+Created on Sat Mar 30 16:03:44 2019
 
 @author: will
 """
-import tensorflow as tf
 import numpy as np
-import pickle
+from torch.utils.data import Dataset
+from torch import nn
 
-class DataGenerator(tf.keras.utils.Sequence):
-    # constants
-    tot_len = 803
-    y_len = 60
-    year_len = 366
-    value_path = '/home/will/Desktop/kaggle/WT/Data/value.npy'
-    IsMissing_path = '/home/will/Desktop/kaggle/WT/Data/IsMissing.npy'
-    start_index_path = '/home/will/Desktop/kaggle/WT/Data/start_index.npy'
-    date_index_path = '/home/will/Desktop/kaggle/WT/Data/date_index'
-    page_path = '/home/will/Desktop/kaggle/WT/Data/Page_X.npy'
-    
-    def __init__(self, batchSize,normalize,x_len=64):
-        'load from disk'
-        start_index = np.load(DataGenerator.start_index_path)
-        values = np.load(DataGenerator.value_path)
-        IsMissing = np.load(DataGenerator.IsMissing_path)
-        page = np.load(DataGenerator.page_path)
-        with open(DataGenerator.date_index_path, "rb") as input_file:
-            date_index = pickle.load(input_file)
-        
-        self.batchSize = batchSize
-        self.filter_index = (DataGenerator.tot_len - start_index) > (DataGenerator.year_len + 2*DataGenerator.y_len) # too few lenth for training
-        self.start_index = start_index[self.filter_index] # numpy array with starting index for each row
-        self.IsMissing = IsMissing[self.filter_index] # same shape as values
-        self.train = values[self.filter_index,:-DataGenerator.y_len] # remove most recent data for val
-        self.page = page[self.filter_index]
-        self.x_len = x_len # lenth of lookback period
-        self.end_index = DataGenerator.tot_len - 2*DataGenerator.y_len - x_len - 1
-        self.values = values # np.array of shape (N, tot_len)
-        self.date_index = date_index # pd.timestamp of length tot_len
-        self.normalize = normalize
-        if normalize:
-            self.mu = np.mean(self.train,1)
-            self.std = np.std(self.train,1)
-        else:
-            self.mu = None
-            self.std = None
-        self.on_epoch_begin()
+
+class SequenceGen(Dataset):
+    def __init__(self,long_value,long_normal_value,start_index,stds,means,
+                 end_index=803-60-60,channelFirst=True,random=True):
+        # random == True for training, and False for validation
+        self.long_value = long_value
+        self.long_normal_value = long_normal_value
+        self.start_index = start_index
+        self.stds = stds
+        self.means = means
+        self.end_index = end_index
+        self.channelFirst = channelFirst
+        self.random = random
 
     def __len__(self):
-        'Denotes the number of batches per epoch.'
-        return int(self.train.shape[0]/self.batchSize)
+        return self.long_value.shape[0]
 
-    def __getitem__(self, index):
-        'Generate one batch of data'
-        batch_index = self.random_index[index*self.batchSize:(index+1)*self.batchSize]
-        page = self.page[batch_index]
-        random_start = (self.start_index[batch_index] + (self.end_index-self.start_index[batch_index])*np.random.rand(self.batchSize)).astype(np.int32)
-        return page.astype(np.float32)
+    def __getitem__(self, idx):
+        r = np.random.randint(self.start_index[idx],self.end_index) if self.random else self.end_index+60
+        X = np.stack([self.long_normal_value[idx,r-120:r],
+                      self.long_normal_value[idx,r-242:r-122],
+                      self.long_normal_value[idx,r-425:r-305],
+                        ],0 if self.channelFirst else 1)
+        std = self.stds[idx]
+        mean = self.means[idx]
+        y = self.long_value[idx,r:r+60]
+        return X,std,mean,y
 
-    def on_epoch_begin(self):
-        self.random_index = np.random.permutation(self.train.shape[0])
-            
-    @staticmethod
-    def __create2(img_list):
-        len_ = len(img_list)
-        if len_ <= 2:
-            return img_list
-        else:
-            np.random.shuffle(img_list)
-            return img_list[:2]
+
+class CNN_RNN2seq(nn.Module):
+    def __init__(self,conv,rnn,linear):
+        super(CNN_RNN2seq, self).__init__()
+        self.conv = conv 
+        self.rnn = rnn
+        self.linear = linear
         
-    def __data_generation(self, indexes):
-        imgs_list = [[np.load(img) for img in group] for group in indexes]
-        imgs_list = [[self.transFun(group[0])[:,:,np.newaxis],self.transFun(group[0])[:,:,np.newaxis]] if len(group)==1 
-                      else [self.transFun(group[0])[:,:,np.newaxis],self.transFun(group[1])[:,:,np.newaxis]] for group in imgs_list]
-        X1,X2 = list(zip(*imgs_list))
-        r = np.random.randint(1,self.HalfBatch)
-        X1,X2 = list(X1),list(X2)
-        X1.extend(X1)
-        X2.extend([X2[(i+r)%self.HalfBatch] for i in range(self.HalfBatch)])
-        return np.array(X1),np.array(X2)
+    def forward(self,X,std,mean):
+        X = self.conv(X).transpose(1,2)
+        X,_ = self.rnn(X)
+        X = X[:,-60:]
+        X = self.linear(X).squeeze(2)
+        X = (X*std)+mean
+        return X
     
+def loss_func_generator(distanceFun):
+    def loss_func(model,data):
+        X,std,mean,y = data
+        yhat = model(X,std,mean)
+        loss = distanceFun(yhat,y)
+        return loss
+    return loss_func    
+    
+
+
+
