@@ -10,6 +10,9 @@ from torch.utils.data import Dataset
 from torch import nn
 import torch
 
+
+''' data generator '''
+
 class SequenceGen(Dataset):
     def __init__(self,long_value,long_normal_value,start_index,stds,means,
                  end_index=803-60-60,channelFirst=True,random=True,useMean=False):
@@ -57,6 +60,52 @@ class SequenceGenNormalized(Dataset):
                       self.long_normal_value[idx,r-242:r-122],
                       self.long_normal_value[idx,r-425:r-305],
                         ],0 if self.channelFirst else 1)
+        y = self.long_normal_value[idx,r:r+60]
+        return X,y
+
+class SequenceGenLong(Dataset):
+    def __init__(self,long_value,long_normal_value,start_index,stds,means,
+                 end_index=803-60-60,channelFirst=True,random=True,useMean=False):
+        # random == True for training, and False for validation
+        self.long_value = long_value
+        self.long_normal_value = long_normal_value
+        # -50 as we need look back 365 instead of 420
+        self.start_index = start_index-50
+        self.stds = stds
+        self.means = means
+        self.end_index = end_index
+        self.channelFirst = channelFirst
+        self.random = random
+        self.useMean = useMean
+        
+    def __len__(self):
+        return self.long_value.shape[0]
+
+    def __getitem__(self, idx):
+        r = np.random.randint(self.start_index[idx],self.end_index) if self.random else self.end_index+60
+        X = np.expand_dims(self.long_normal_value[idx,r-366:r],0 if self.channelFirst else 1)
+        std = self.stds[idx]
+        mean = self.means[idx] if self.useMean else self.long_value[idx,r-1:r]
+        y = self.long_value[idx,r:r+60]
+        return X,std,mean,y
+
+class SequenceGenNormalizedLong(Dataset):
+    def __init__(self,long_normal_value,start_index,
+                 end_index=803-60-60,channelFirst=True,random=True):
+        # random == True for training, and False for validation
+        self.long_normal_value = long_normal_value
+        # -50 as we need look back 365 instead of 420
+        self.start_index = start_index - 50
+        self.end_index = end_index
+        self.channelFirst = channelFirst
+        self.random = random
+
+    def __len__(self):
+        return self.long_normal_value.shape[0]
+
+    def __getitem__(self, idx):
+        r = np.random.randint(self.start_index[idx],self.end_index) if self.random else self.end_index+60
+        X = np.expand_dims(self.long_normal_value[idx,r-366:r],0 if self.channelFirst else 1)
         y = self.long_normal_value[idx,r:r+60]
         return X,y
     
