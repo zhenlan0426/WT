@@ -161,6 +161,50 @@ def loss_func_generator(distanceFun):
         return loss
     return loss_func    
 
+class CNN_RNN2seq_NCL(nn.Module):
+    # input/oputput with shape (batch, channel, length) for RNN and CNN
+    # rnn needs to be instance of GRU_NCL
+    def __init__(self,seq_model,linear,convert=None):
+        # convert maps N,C,L to N,C,60
+        super().__init__()
+        self.seq_model = seq_model 
+        self.linear = linear
+        self.convert = convert
+        
+    def forward(self,X,std,mean):
+        X = self.seq_model(X)
+        X = X[:,:,-60:] if self.convert is None else self.convert(X).transpose(1,2)
+        X = self.linear(X).squeeze(2)
+        X = (X*std)+mean
+        return X
+    
+class CNN_RNN2seq_normalized_NCL(nn.Module):
+    def __init__(self,seq_model,linear,convert=None):
+        super().__init__()
+        self.seq_model = seq_model
+        self.linear = linear
+        self.convert = convert
+        
+    def forward(self,X):
+        X = self.seq_model(X)
+        X = X[:,:,-60:] if self.convert is None else self.convert(X).transpose(1,2)
+        X = self.linear(X).squeeze(2)
+        return X    
+
+class CNN_RNN2seq_logNormalized_NCL(nn.Module):
+    def __init__(self,seq_model,linear,convert=None):
+        super().__init__()
+        self.seq_model = seq_model 
+        self.linear = linear
+        self.convert = convert
+        
+    def forward(self,X,std,mean):
+        X = self.seq_model(X)
+        X = X[:,:,-60:] if self.convert is None else self.convert(X).transpose(1,2)
+        X = self.linear(X).squeeze(2)
+        X = torch.exp((X*std)+mean) - 1
+        return X
+
 def loss_func_generator_normalized(distanceFun):
     def loss_func(model,data):
         X,y = data
